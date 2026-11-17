@@ -53,6 +53,7 @@ Para publicar uma versão nova:
 4. Aqui no GitHub, envie esse arquivo para a pasta `estacao/` com o nome **`firmware.bin`**.
 5. Edite `estacao/versao.txt` para o **mesmo número** do `FW_VERSAO`.
 6. Em até ~5 minutos a estação mostra *ATUALIZANDO...* e reinicia com a versão nova.
+   **Para não esperar:** segure o botão **PRG** da estação por 3 s (ou digite `u` no Serial Monitor).
 
 ### Carro (pelo navegador)
 

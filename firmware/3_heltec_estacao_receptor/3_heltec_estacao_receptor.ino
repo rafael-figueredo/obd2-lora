@@ -12,6 +12,7 @@
  * - OLED animado (carrinho) + ícone de Wi-Fi e nº de linhas esperando envio
  * - ATUALIZAÇÃO REMOTA (OTA pelo GitHub): a cada 5 min confere o versao.txt do repositório;
  *   se o número for maior que FW_VERSAO, baixa o firmware.bin, grava e reinicia sozinha
+ *   Forçar na hora: segure o botão PRG por 3 s (ou digite "u" no Serial Monitor)
  *
  * NUNCA ligue a placa sem a antena LoRa conectada!
  *
@@ -118,6 +119,9 @@ volatile bool wifiOk = false;
 // Atualização remota
 volatile int otaProgresso  = -1;      // -1 = não está atualizando | 0..100 = %
 volatile int otaVersaoNova = 0;
+volatile bool forcarOTA     = false;  // botão PRG 3 s ou "u" no Serial Monitor
+uint32_t avisoAte = 0;                // mensagem rápida na tela
+const char *avisoTexto = "";
 
 // Configuração em uso (vem da memória da placa)
 String cfgSsid, cfgSenha, cfgUrl;
@@ -290,7 +294,7 @@ int lerVersaoRemota() {
   return v;
 }
 
-void verificarAtualizacao() {
+void verificarAtualizacao(bool forcado) {
   int remota = lerVersaoRemota();
   if (remota <= 0) {
     Serial.println("[OTA] nao consegui ler o versao.txt (URL certa? repositorio publico?)");
@@ -298,6 +302,7 @@ void verificarAtualizacao() {
   }
   if (remota <= FW_VERSAO) {
     Serial.printf("[OTA] em dia (v%d)\n", FW_VERSAO);
+    if (forcado) { avisoTexto = "JA ESTA NA ULTIMA VERSAO"; avisoAte = millis() + 3000; }
     return;
   }
 
@@ -306,7 +311,7 @@ void verificarAtualizacao() {
   Preferences pref;
   pref.begin("ota", false);
   int tentou = pref.getInt("tentou", 0);
-  if (tentou == remota) {
+  if (tentou == remota && !forcado) {
     Serial.printf("[OTA] v%d ja foi instalada mas a placa continua v%d: confira o FW_VERSAO do .bin publicado\n",
                   remota, FW_VERSAO);
     pref.end();
@@ -326,7 +331,8 @@ void verificarAtualizacao() {
   httpUpdate.onProgress([](int atual, int total) {
     if (total > 0) otaProgresso = (int)(100LL * atual / total);
   });
-  t_httpUpdate_return r = httpUpdate.update(cli, URL_FIRMWARE);
+  String urlBin = String(URL_FIRMWARE) + "?t=" + String(millis());   // evita pegar o .bin antigo do cache
+  t_httpUpdate_return r = httpUpdate.update(cli, urlBin);
 
   if (r == HTTP_UPDATE_OK) {
     Serial.println("[OTA] gravado! Reiniciando com a versao nova...");
@@ -337,6 +343,8 @@ void verificarAtualizacao() {
   Serial.printf("[OTA] falhou (%d): %s\n", httpUpdate.getLastError(),
                 httpUpdate.getLastErrorString().c_str());
   otaProgresso = -1;
+  avisoTexto = "ATUALIZACAO FALHOU";
+  avisoAte = millis() + 3000;
 }
 
 // =================================================================
@@ -391,9 +399,12 @@ void tarefaUpload(void *) {
     }
 
     static uint32_t ultimaOTA = 0;
-    if (ultimaOTA == 0 || millis() - ultimaOTA >= INTERVALO_OTA_MS) {
+    if (forcarOTA || ultimaOTA == 0 || millis() - ultimaOTA >= INTERVALO_OTA_MS) {
+      bool forcado = forcarOTA;
+      forcarOTA = false;
       ultimaOTA = millis();
-      verificarAtualizacao();
+      if (forcado) Serial.println("[OTA] verificacao forcada");
+      verificarAtualizacao(forcado);
     }
 
     if (linhasPendentes > 0 && cfgUrl.length() > 0) {
@@ -777,6 +788,13 @@ void desenharTela(float dt) {
   }
   if (!semSinal && t - ultimoPacoteMs < 150) oled.drawDisc(3, 3, 2);   // pontinho: chegou pacote
   desenharStatusRede();
+  if (millis() < avisoAte) {                       // aviso rápido por cima da tela
+    oled.setFont(u8g2_font_5x7_tf);
+    int w = oled.getStrWidth(avisoTexto) + 8;
+    oled.setDrawColor(0); oled.drawBox((128 - w) / 2, 22, w, 13); oled.setDrawColor(1);
+    oled.drawFrame((128 - w) / 2, 22, w, 13);
+    oled.drawStr((128 - w) / 2 + 4, 31, avisoTexto);
+  }
   oled.sendBuffer();
 }
 
@@ -802,7 +820,7 @@ void setup() {
   if (!LittleFS.begin(true)) Serial.println("[ERRO] LittleFS nao montou");
   contarPendentes();
   Serial.printf("Fila local: %d linhas esperando envio\n", (int)linhasPendentes);
-  Serial.printf("Firmware v%d | teste da planilha: digite t ou aperte PRG\n", FW_VERSAO);
+  Serial.printf("Firmware v%d | t ou toque no PRG = teste da planilha | u ou PRG 3 s = atualizar agora\n", FW_VERSAO);
 
   iniciarLoRa();
   xTaskCreatePinnedToCore(tarefaUpload, "upload", 12288, NULL, 1, NULL, 0);
@@ -818,14 +836,31 @@ void loop() {
   }
 
   // Teste da planilha: "t" no Serial Monitor OU apertar o botão PRG da placa
+  // Serial Monitor: "t" = linha de teste na planilha | "u" = procurar atualização agora
   while (Serial.available()) {
     char c = Serial.read();
     if (c == 't' || c == 'T') enfileirarTeste();
+    if (c == 'u' || c == 'U') {
+      forcarOTA = true;
+      avisoTexto = "PROCURANDO ATUALIZACAO...";
+      avisoAte = millis() + 3000;
+    }
   }
-  static uint32_t ultimoBotao = 0;
-  if (digitalRead(PIN_BOTAO_PRG) == LOW && millis() - ultimoBotao > 1000) {
-    ultimoBotao = millis();
-    enfileirarTeste();
+
+  // Botão PRG: toque rápido = linha de teste | segurar 3 s = procurar atualização agora
+  static uint32_t apertadoDesde = 0;
+  static bool longoFeito = false;
+  if (digitalRead(PIN_BOTAO_PRG) == LOW) {
+    if (apertadoDesde == 0) { apertadoDesde = millis(); longoFeito = false; }
+    if (!longoFeito && millis() - apertadoDesde >= 3000) {
+      longoFeito = true;
+      forcarOTA = true;
+      avisoTexto = "PROCURANDO ATUALIZACAO...";
+      avisoAte = millis() + 3000;
+    }
+  } else if (apertadoDesde != 0) {
+    if (!longoFeito && millis() - apertadoDesde > 50) enfileirarTeste();
+    apertadoDesde = 0;
   }
 
   // Apaga o LED 50 ms depois do pacote
