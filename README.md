@@ -19,8 +19,11 @@ ELM327 ──Bluetooth──> HC-05 ──serial──> Heltec do carro ──Lo
 | `planilha/apps_script.gs` | Script do Google Sheets (Extensões > Apps Script) |
 | `estacao/` | `versao.txt` e `firmware.bin` que a estação baixa sozinha (OTA) |
 
-> O código da estação está com `WIFI_SSID`, `WIFI_SENHA` e `URL_SCRIPT` em branco de propósito
-> (repositório público). Preencha antes de gravar.
+> **Dados sensíveis ficam fora do GitHub.** O código da estação aqui está com `WIFI_SSID`,
+> `WIFI_SENHA` e `URL_SCRIPT` vazios de propósito. Na **primeira gravação pelo USB**, use uma cópia
+> com esses dados preenchidos: a placa salva tudo na memória dela (que não é apagada nas
+> atualizações). Os `firmware.bin` publicados aqui são compilados **desta versão vazia** e usam
+> o que já está salvo na placa.
 
 ## Ligações (Heltec do carro)
 
@@ -44,7 +47,7 @@ A estação confere `estacao/versao.txt` a cada 5 minutos. Se o número for maio
 
 Para publicar uma versão nova:
 
-1. No código da estação, aumente `#define FW_VERSAO` (ex.: de `1` para `2`).
+1. Abra **`firmware/3_heltec_estacao_receptor`** (a versão SEM Wi-Fi/URL) e aumente `#define FW_VERSAO` (ex.: de `1` para `2`).
 2. Arduino IDE: **Sketch > Export Compiled Binary**.
 3. Na pasta `build/...` do sketch, pegue o arquivo **`.ino.bin`** (não o `.merged.bin`).
 4. Aqui no GitHub, envie esse arquivo para a pasta `estacao/` com o nome **`firmware.bin`**.

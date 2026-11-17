@@ -33,12 +33,14 @@
 #include <Preferences.h>
 
 // ======================= CONFIGURAÇÃO =======================
-// Wi-Fi da estação
-#define WIFI_SSID    "NOME_DO_WIFI"
-#define WIFI_SENHA   "SENHA_DO_WIFI"
+// Wi-Fi da estação e URL da planilha
+// - Preenchidos: na 1ª gravação (USB) são SALVOS na memória da placa (não somem com atualizações)
+// - Vazios (""): a placa usa o que já está salvo -> é a versão que vai para o GitHub público
+#define WIFI_SSID    ""
+#define WIFI_SENHA   ""
 
-// Google Sheets: URL da implantação do Apps Script (termina em /exec)
-#define URL_SCRIPT   "https://script.google.com/macros/s/COLE_O_ID_AQUI/exec"
+// URL da implantação do Apps Script (termina em /exec) — vazio = usa a salva
+#define URL_SCRIPT   ""
 #define CHAVE        "obd2-lora-2026"     // tem que ser IGUAL à do Apps Script
 
 #define INTERVALO_LEITURA_MS   10000      // 1 linha em "Leituras" a cada 10 s
@@ -116,6 +118,29 @@ volatile bool wifiOk = false;
 // Atualização remota
 volatile int otaProgresso  = -1;      // -1 = não está atualizando | 0..100 = %
 volatile int otaVersaoNova = 0;
+
+// Configuração em uso (vem da memória da placa)
+String cfgSsid, cfgSenha, cfgUrl;
+
+void carregarConfig() {
+  Preferences p;
+  p.begin("cfg", false);
+  if (strlen(WIFI_SSID) > 0 && String(WIFI_SSID) != "NOME_DO_WIFI") {
+    p.putString("ssid", WIFI_SSID);
+    p.putString("senha", WIFI_SENHA);
+  }
+  if (strlen(URL_SCRIPT) > 0 && String(URL_SCRIPT).indexOf("COLE_O_ID") < 0) {
+    p.putString("url", URL_SCRIPT);
+  }
+  cfgSsid  = p.getString("ssid", "");
+  cfgSenha = p.getString("senha", "");
+  cfgUrl   = p.getString("url", "");
+  p.end();
+  Serial.printf("Config: Wi-Fi \"%s\" | planilha %s\n", cfgSsid.c_str(),
+                cfgUrl.length() ? "configurada" : "NAO configurada");
+  if (cfgSsid.length() == 0)
+    Serial.println("[ERRO] Sem Wi-Fi salvo: grave uma vez pelo USB com WIFI_SSID e URL_SCRIPT preenchidos");
+}
 
 // =================================================================
 //  FILA LOCAL (LittleFS)
@@ -323,7 +348,8 @@ bool enviarLote(const String &corpo, int n) {
   HTTPClient http;
   http.setTimeout(20000);
   http.setFollowRedirects(HTTPC_DISABLE_FOLLOW_REDIRECTS);
-  if (!http.begin(cli, URL_SCRIPT)) return false;
+  if (cfgUrl.length() == 0) return false;
+  if (!http.begin(cli, cfgUrl)) return false;
   http.addHeader("Content-Type", "application/json");
   int code = http.POST(corpo);
   String resp = (code == 200) ? http.getString() : String("");
@@ -342,14 +368,15 @@ void tarefaUpload(void *) {
   WiFi.mode(WIFI_STA);
 
   for (;;) {
+    if (cfgSsid.length() == 0) { vTaskDelay(pdMS_TO_TICKS(5000)); continue; }
     if (WiFi.status() != WL_CONNECTED) {
       if (wifiOk) Serial.println("[WiFi] caiu");
       wifiOk = false;
       if (ultTentativa == 0 || millis() - ultTentativa > 15000) {
         ultTentativa = millis();
-        Serial.printf("[WiFi] conectando em \"%s\"...\n", WIFI_SSID);
+        Serial.printf("[WiFi] conectando em \"%s\"...\n", cfgSsid.c_str());
         WiFi.disconnect();
-        WiFi.begin(WIFI_SSID, WIFI_SENHA);
+        WiFi.begin(cfgSsid.c_str(), cfgSenha.c_str());
       }
       vTaskDelay(pdMS_TO_TICKS(500));
       continue;
@@ -369,7 +396,7 @@ void tarefaUpload(void *) {
       verificarAtualizacao();
     }
 
-    if (linhasPendentes > 0) {
+    if (linhasPendentes > 0 && cfgUrl.length() > 0) {
       String corpo;
       int n = lerLote(corpo);
       if (n > 0) {
@@ -767,6 +794,8 @@ void setup() {
   oled.setBusClock(400000);
   randomSeed(esp_random());
   splash("ESTACAO + SHEETS");
+
+  carregarConfig();
 
   // Fila local
   mutexFila = xSemaphoreCreateMutex();
